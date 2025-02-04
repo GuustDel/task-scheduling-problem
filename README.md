@@ -22,8 +22,8 @@ This project is a constraint programming application that uses [CPMpy](https://g
 1. **Clone the repository:**
 
    ```bash
-   git clone https://github.com/yourusername/production-line-worker-allocation.git
-   cd production-line-worker-allocation
+   git clone https://github.com/GuustDel/task-scheduling-problem.git
+   cd task-scheduling-problem
    ```
 
 2. **(Optional) Create a virtual environment:**
@@ -48,10 +48,8 @@ This project is a constraint programming application that uses [CPMpy](https://g
 1. **Run the application:**
 
    ```bash
-   python your_script_name.py
+   python TSP_cop.py
    ```
-
-Replace your_script_name.py with the name of the Python file containing the application code.
 
 2. **Enter Parameters:**
 
