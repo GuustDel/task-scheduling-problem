@@ -17,7 +17,7 @@ and, secondarily, penalizes using non–preferred workers.
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from cpmpy import *
+import cpmpy as cp
 import numpy as np
 from fractions import Fraction
 
@@ -33,32 +33,67 @@ automated_tasks = [
 # Sequential tasks (with base times)
 sequential_tasks = [
     "Wash Glass", 
-    "Lay EVA Foil / Operate Lay-up Machine", 
-    "Quality Check / Operate Bussing Machine", 
-    "Finish Soldering", 
-    "Lay Back Glass", 
-    "Polish Glass", 
-    "Measure Performance",
-    "Operate Laminator"
+    "Lay EVA",
+    "Lay-up quality Check",
+    "Manual Soldering", 
+    "Closing", 
+    "Poetsen", 
+    "Flashen",
 ]
 
 # Non-sequential tasks (no base time required)
-non_sequential_tasks = ["Stringing"]
+non_sequential_tasks = [
+    "Stringing",
+    "Operate Lay-up Machine",
+    "Operate Bussing Machine",
+    "Operate Laminator"
+]
 
 # Combined list of all tasks for modeling and skill assignment.
 tasks_for_model = sequential_tasks + non_sequential_tasks
 
 # Default base times for sequential tasks (as floats, e.g. 4.5 means 9/2)
-default_seq_times = [5.0, 4.0, 3.5, 3.0, 4.0, 3.0, 2.5, 1.0]
+default_seq_times = [5.0, 4.0, 3.5, 3.0, 4.0, 3.0, 2.5]
 # (There is no base time for "Stringing" because its only constraint is to assign one worker.)
 
 # Default cycle times for automated tasks
-default_auto_times = [4.0, 3.5, 5.0]  # the slowest is 5.0
+default_auto_times = [4.0, 3.5, 4.5]  # the slowest is 5.0
 
 # Define a default number of available workers.
 # (Assume that each station is manned concurrently so the same worker cannot cover two stations.)
-default_num_workers = 32
-worker_names = [f"Worker {i+1}" for i in range(default_num_workers)]
+worker_names = ["Arben", "Jamil", "Khairullah", "Fazli", "Mohammedsalih", "Singh", "Chance", "Tashrif", "Shahidullah", "Himmat", "Benda", "Shams", "Beata", "Roger", "Raphael", "Serhii", "Sabba", "Fahim", "Mahmoud", "Fanuel", "Tedros", "Latifi", "Oksana", "Romy", "Zakhel", "Abdul", "Farhadullah"]
+default_num_workers = len(worker_names)
+
+skill_matrix = [
+    # wash glass, lay EVA, lay-up quality check, manual soldering, closing, poetsen, flashen, stringing, operate lay-up, operate bussing, operate laminator
+    [1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0], # Arben
+    [1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0], # Jamil 
+    [1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0], # Khairullah
+    [0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0], # Fazli
+    [1, 1, 1, 0, 1, 1, 0, 1, 1, 0, 1], # Mohammedsalih
+    [0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1], # Singh
+    [1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0], # Chance
+    [0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0], # Tashrif
+    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0], # Shahidullah
+    [1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Himmat
+    [1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0], # Benda
+    [1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Shams
+    [0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0], # Beata
+    [1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], # Roger
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 1], # Raphael
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0], # Serhii
+    [1, 1, 1, 1, 0, 1, 0, 0, 1, 0, 0], # Sabba
+    [1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Fahim
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0], # Mahmoud
+    [0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 1], # Fanuel
+    [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1], # Tedros
+    [0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0], # Latifi
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0], # Oksana
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0], # Romy
+    [1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Zakhel
+    [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0], # Abdul
+    [0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0] # Farhadullah
+]
 
 # A large constant for lexicographic weighting.
 LARGE_WEIGHT = default_num_workers + 1
@@ -82,6 +117,11 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list):
     n_seq = len(seq_times)                   # number of sequential tasks
     total_tasks = len(tasks_for_model)        # total tasks (sequential + non-sequential)
     num_workers = len(skill_matrix)
+
+    lay_eva_index = sequential_tasks.index("Lay EVA")
+    operate_layup_index = tasks_for_model.index("Operate Lay-up Machine")
+    layup_quality_index = sequential_tasks.index("Lay-up quality Check")
+    operate_bussing_index = tasks_for_model.index("Operate Bussing Machine")
     
     # Compute the bottleneck cycle time T from the automated tasks.
     # Use Fraction to represent numbers as rational numbers.
@@ -91,28 +131,28 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list):
     # For each task m in tasks_for_model, let x[m] be the number of workers assigned.
     # For sequential tasks, x[m] must be chosen to satisfy the effective time constraint.
     # For non-sequential tasks (e.g. Stringing) we force x[m] == 1.
-    x = [intvar(1, num_workers, name=f"x_{m}") for m in range(total_tasks)]
-    
-    # For each worker i and task m, assign[i][m] is binary: 1 if worker i is assigned to task m.
-    assign = [[boolvar(name=f"assign_{i}_{m}") for m in range(total_tasks)] for i in range(num_workers)]
-    
-    model = Model()
-    
+    x = cp.intvar(1, num_workers, shape=total_tasks)
+
+    # For each worker i and task m, assign[i, m] is binary: 1 if worker i is assigned to task m.
+    assign = cp.boolvar(shape=(num_workers, total_tasks))
+
+    model = cp.Model()
+
     # Constraint 1: For each task, the number of assigned workers equals x[m].
     for m in range(total_tasks):
-        model += (sum(assign[i][m] for i in range(num_workers)) == x[m])
-    
-    # Constraint 2: Each worker can be assigned to at most one task.
+        model += cp.sum(assign[i, m] for i in range(num_workers)) == x[m]
+
+    # Constraint 2: Each worker can be assigned to at most one task expect for the operation of Lay-up and Bussing machine.
     for i in range(num_workers):
-        model += (sum(assign[i][m] for m in range(total_tasks)) <= 1)
-    
+        model += (sum(assign[i, m] for m in range(total_tasks) if m not in [operate_bussing_index, operate_layup_index]) <= 1)
+
     # Constraint 3: A worker may only be assigned to a task if they are skilled.
     for i in range(num_workers):
         for m in range(total_tasks):
             if not skill_matrix[i][m]:
-                model += (assign[i][m] == 0)
-    
-    # Constraint 4: Task-specific constraints.
+                model += (assign[i, m] == 0)
+
+    # Constraint 4: The cycle time of every manual task should be as close as possible (but still faster) then the slowest automated task.
     for m in range(total_tasks):
         if m < n_seq:
             # For sequential tasks, enforce: base_time <= T * x[m]
@@ -121,31 +161,29 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list):
             multiplier = 2 if m == 0 else 1
             model += (multiplier * m_frac.numerator * T_frac.denominator <= T_frac.numerator * m_frac.denominator * x[m])
         else:
-            # For non-sequential tasks (e.g. "Stringing"), exactly one worker must be assigned.
+            # For non-sequential tasks, force x[m] == 1.
             model += (x[m] == 1)
-    
+
+    # Constraint 5: At least one worker that is allocated to "Lay-up Quality Check" must be allocated to "Operate Lay-up Machine", same for "Lay EVA" and "Operate Bussing Machine".
+    model += cp.sum([assign[i, lay_eva_index] & assign[i, operate_layup_index] for i in range(num_workers)]) >= 1
+    model += cp.sum([assign[i, layup_quality_index] & assign[i, operate_bussing_index] for i in range(num_workers)]) >= 1
+
     # --- Introduce worker "used" variables for preference tracking ---
-    used = [boolvar(name=f"used_{i}") for i in range(num_workers)]
+    used = cp.boolvar(shape=num_workers)
     for i in range(num_workers):
-        model += (used[i] == sum(assign[i][m] for m in range(total_tasks)))
-    
+        model += (cp.sum([assign[i, m] for m in range(total_tasks)]) >= 1).implies(used[i])
+
     # --- Objective: Minimize total workers used (primary) and then penalize using non-preferred workers.
-    p = [1 if preferred_list[i] else 0 for i in range(num_workers)]
-    obj_expr = LARGE_WEIGHT * sum(used[i] for i in range(num_workers)) \
-               + sum((1 - p[i]) * used[i] for i in range(num_workers))
-    model.minimize(obj_expr)
-    
-    if model.solve():
-        x_vals = [x[m].value() for m in range(total_tasks)]
-        assign_matrix = [[assign[i][m].value() for m in range(total_tasks)] for i in range(num_workers)]
-        used_vals = [used[i].value() for i in range(num_workers)]
-        total_workers_used = sum(used_vals)
+    obj = LARGE_WEIGHT * sum(used[i] for i in range(num_workers)) \
+                + sum(used[i] for i in range(num_workers))
+    model.minimize(obj)
         
+    if model.solve():        
         sol = {
-            "x": x_vals,
-            "assignment": assign_matrix,
-            "used": used_vals,
-            "total_workers": total_workers_used,
+            "x": x.value(),
+            "assignment": assign.value(),
+            "used": used.value(),
+            "total_workers": sum(used.value()),
             "T": T_frac
         }
         return sol
@@ -161,7 +199,8 @@ class ProductionLineUI(tk.Tk):
 
         # Create a canvas and a scrollbar
         self.canvas = tk.Canvas(self)
-        self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.v_scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.h_scrollbar = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
         self.scrollable_frame = ttk.Frame(self.canvas)
 
         self.scrollable_frame.bind(
@@ -172,13 +211,15 @@ class ProductionLineUI(tk.Tk):
         )
 
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.configure(yscrollcommand=self.v_scrollbar.set, xscrollcommand=self.h_scrollbar.set)
 
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
+        self.v_scrollbar.pack(side="right", fill="y")
+        # self.h_scrollbar.pack(side="bottom", fill="x")
 
         # Bind mouse wheel events to the canvas
         self.canvas.bind_all("<MouseWheel>", self._on_mouse_wheel)
+        self.canvas.bind_all("<Shift-MouseWheel>", self._on_shift_mouse_wheel)
 
         # Create two main frames: one for parameters (left) and one for output (right)
         self.left_frame = ttk.Frame(self.scrollable_frame)
@@ -222,7 +263,7 @@ class ProductionLineUI(tk.Tk):
             row_vars = []
             ttk.Label(skill_frame, text=worker_names[i]).grid(row=i+1, column=0, padx=3, pady=3, sticky="w")
             for m in range(len(tasks_for_model)):
-                var = tk.IntVar(value=1)  # default: worker is skilled at every task
+                var = tk.IntVar(value=skill_matrix[i][m])
                 cb = ttk.Checkbutton(skill_frame, variable=var)
                 cb.grid(row=i+1, column=m+1, padx=3, pady=3)
                 row_vars.append(var)
@@ -233,7 +274,7 @@ class ProductionLineUI(tk.Tk):
         pref_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
         ttk.Label(pref_frame, text="Preferred Workers (check to prefer):").grid(row=0, column=0, padx=5, pady=5)
         self.pref_vars = []
-        pref_max_cols = 9  # Maximum number of columns for preference checkbuttons.
+        pref_max_cols = 10  # Maximum number of columns for preference checkbuttons.
         for i in range(default_num_workers):
             col = i % pref_max_cols
             row = 1 + (i // pref_max_cols)
@@ -252,6 +293,9 @@ class ProductionLineUI(tk.Tk):
 
     def _on_mouse_wheel(self, event):
         self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def _on_shift_mouse_wheel(self, event):
+        self.canvas.xview_scroll(int(-1*(event.delta/120)), "units")
     
     def solve_and_display(self):
         # Read automated task cycle times.
@@ -296,7 +340,7 @@ class ProductionLineUI(tk.Tk):
             for m, task in enumerate(tasks_for_model):
                 assigned_workers = []
                 for i in range(default_num_workers):
-                    if sol["assignment"][i][m] == 1:
+                    if sol["assignment"][i, m] == 1:
                         assigned_workers.append(worker_names[i])
                 if m < n_seq:
                     # For sequential tasks, display effective time.
