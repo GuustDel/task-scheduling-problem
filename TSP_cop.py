@@ -116,6 +116,7 @@ flashen_index = sequential_tasks.index("Flashen")
 operate_layup_index = tasks_for_model.index("Operate Lay-up Machine")
 operate_bussing_index = tasks_for_model.index("Operate Bussing Machine")
 operate_laminator_index = tasks_for_model.index("Operate Laminator")
+stringing_index = tasks_for_model.index("Stringing")
 
 task_pairs = [(wash_glass_index, lay_eva_index), (manual_soldering_index, closing_index), (closing_index, poetsen_index)]
 
@@ -157,7 +158,7 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
 
     # Constraint 1: For each task, the number of assigned workers equals x[m].
     for m in range(total_tasks):
-        model += cp.sum(assign[i, m] for i in range(num_workers)) == x[m]
+        model += cp.sum([assign[i, m] for i in range(num_workers)]) == x[m]
     
     # Constraint 2: For each sequential task, at least the minimum required workers are assigned.
     for m in range(n_seq):
@@ -171,6 +172,7 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     
     # Constraint 4: Ensure that each laminator has exactly one worker assigned.
     model += x[operate_laminator_index] == num_laminators
+    model += x[stringing_index] == 1
 
     # Constraint 5: For non-sequential tasks, force x[m] == 1.
     for m in range(n_seq, total_tasks):
@@ -200,30 +202,27 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
 
     # Constraint 7: Each worker can be assigned to at most one task, except for paired tasks.
     # Non-paired tasks do not share time and have equal work distribution.
-    # Paired tasks allow workers to split time if they do not exceed a certain threshold on either task.    
-    splittable_tasks = set()
-    for (a, b) in task_pairs:
-        splittable_tasks.add(a)
-        splittable_tasks.add(b)
+    # Paired tasks allow workers to split time if they do not exceed a certain threshold on either task. 
+    split_work = cp.boolvar(shape=(num_workers, len(task_pairs)))
     for i in range(num_workers):
-        # For tasks not in the splittable set (and excluding, say, special machine operations)
-        non_splittable = [m for m in range(total_tasks)
-                          if (m < n_seq and m not in splittable_tasks) or m >= n_seq]
-        model += cp.sum(assign[i, m] for m in non_splittable) <= 1
+        for j, (a, b) in enumerate(task_pairs):
+            model += (split_work[i, j]).implies(assign[i, a] + assign[i, b] == 2)
+    for i in range(num_workers):
+        model += (cp.sum(split_work[i, :]) >= 1).implies(cp.sum(assign[i, range(n_seq)]) == 2)
+        model += (cp.sum(split_work[i, :]) == 0).implies(cp.sum(assign[i, range(n_seq)]) <= 1)
 
     # Constraint 8 & 9: If a worker i is not assigned to task m then his oocupation[i, m] == 0. 
     # If a worker is assigned to a non-splittable task, Then the work is distributed evenly between the workers assigned to that task. 
     # occupation[i, m] == seq_times[m] // (x[m] * T_frac).
+    seq_times_frac = [Fraction(str(t)) for t in seq_times]
     for i in range(num_workers):
         for m in range(n_seq):
             model += occupation[i, m] <= 100 * assign[i, m]
-            if m not in splittable_tasks:
-                model += occupation[i, m] * x[m] * T_frac.numerator == 100 * seq_times[m] * T_frac.denominator
 
     # Constraint 10: For each sequential task, the sum of the fractions (i.e. effective worker–capacity) must cover the work.
-    seq_times_frac = [Fraction(str(t)) for t in seq_times]
     for m in range(n_seq):
-        required = 100 * seq_times_frac[m].numerator * T_frac.denominator // (T_frac.numerator * x[m] * seq_times_frac[m].denominator)
+        required = (100 * seq_times_frac[m].numerator * T_frac.denominator // (T_frac.numerator * x[m] * seq_times_frac[m].denominator)) + 1
+        print(f"Task {m}: required = {required}")
         # We allow a penalty if the capacity is a bit short; the objective will try to drive these penalties to zero.
         model += cp.sum(occupation[i, m] for i in range(num_workers)) + penalty[m] >= required
 
@@ -253,8 +252,8 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # (secondarily) avoid using non-preferred workers, and (tertiary) minimize any penalties.
     p = [1 if preferred_list[i] else 0 for i in range(num_workers)]
     obj = (LARGE_WEIGHT  * cp.sum(used[i] for i in range(num_workers)) +
-           MEDIUM_WEIGHT * cp.sum(penalty[m] for m in range(n_seq)) +
-           SMALL_WEIGHT  * cp.sum((1 - p[i]) * used[i] for i in range(num_workers)))
+           MEDIUM_WEIGHT * cp.sum(penalty[m] for m in range(n_seq)) -
+           SMALL_WEIGHT  * cp.sum(p[i] * used[i] for i in range(num_workers)))
     
     model.minimize(obj)
         
@@ -266,6 +265,8 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
             "total_workers": sum(used.value()),
             "T": T_frac
         }
+        print(obj.value())
+        print(occupation.value())
         return sol
     else:
         return None
