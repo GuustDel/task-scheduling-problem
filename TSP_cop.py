@@ -62,6 +62,7 @@ default_auto_times = [3.2, 4.1, 18.0]  # the slowest is 18.0
 
 default_num_laminators = 1
 default_min_workers = [1, 1, 1, 1, 2, 1, 1, 1]
+default_max_workers = [999, 2, 999, 999, 2, 999, 999, 999]
 
 # Define a default number of available workers.
 # (Assume that each station is manned concurrently so the same worker cannot cover two stations.)
@@ -118,9 +119,9 @@ operate_bussing_index = tasks_for_model.index("Operate Bussing Machine")
 operate_laminator_index = tasks_for_model.index("Operate Laminator")
 stringing_index = tasks_for_model.index("Stringing")
 
-task_pairs = [(wash_glass_index, lay_eva_index), (manual_soldering_index, closing_index), (closing_index, poetsen_index)]
+task_pairs = [(wash_glass_index, lay_eva_index), (manual_soldering_index, closing_index), (closing_index, poetsen_index), (layup_quality_index, manual_soldering_index)]
 
-def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminators, min_workers, occupation_treshold, task_pairs=task_pairs):
+def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminators, min_workers, max_workers, occupation_treshold, efficiency, task_pairs=task_pairs):
     """
     Build and solve the model.
     
@@ -163,6 +164,7 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # Constraint 2: For each sequential task, at least the minimum required workers are assigned.
     for m in range(n_seq):
         model += x[m] >= min_workers[m]
+        model += x[m] <= max_workers[m]
 
     # Constraint 3: A worker may only be assigned to a task if they are skilled.
     for i in range(num_workers):
@@ -175,14 +177,15 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     model += x[stringing_index] == 1
 
     # Constraint 5: For non-sequential tasks, force x[m] == 1.
-    for m in range(n_seq, total_tasks):
+    for m in range(n_seq, total_tasks-1):
         model += x[m] == 1
 
     # Constraint 6: At least one worker that is allocated to "Lay-up Quality Check" must be allocated to "Operate Lay-up Machine".
     # Same for "Lay EVA" and "Operate Bussing Machine".
     model += cp.sum([assign[i, lay_eva_index] & assign[i, operate_layup_index] for i in range(num_workers)]) >= 1
     model += cp.sum([assign[i, layup_quality_index] & assign[i, operate_bussing_index] for i in range(num_workers)]) >= 1
-
+    for i in range(num_workers):
+        model += cp.sum([assign[i, j] for j in range(n_seq, total_tasks)]) <= 1
 
     # =============== OCCUPATION OPTIMIZATION ==============
     # === Manual capacity constraints and "sharing" rule ===
@@ -198,7 +201,15 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # then we need: sum_i frac[i, m] + penalty[m] >= required_fraction.
     
     # Introduce integer decision variables for the fraction of time each worker spends on each sequential task.
-    occupation = cp.intvar(0, 100, shape=(num_workers, n_seq))
+    occupation = cp.intvar(0, 100, shape=(num_workers, total_tasks))
+
+    # Introduce binary variables to indicate if a worker is assigned to a task
+    occupation_nonzero = cp.boolvar(shape=(num_workers, n_seq))
+
+    efficiency_multiplier = np.zeros((num_workers, n_seq), dtype=int)
+    for i in range(num_workers):
+        for j in range(n_seq):
+            efficiency_multiplier[i, j] = int(100 * (efficiency[j]/100)**(i) // 1)
 
     # Constraint 7: Each worker can be assigned to at most one task, except for paired tasks.
     # Non-paired tasks do not share time and have equal work distribution.
@@ -218,17 +229,20 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     for i in range(num_workers):
         for m in range(n_seq):
             model += occupation[i, m] <= 100 * assign[i, m]
+            model += occupation_nonzero[i, m] == (occupation[i, m] > 0)
 
     # Constraint 10: For each sequential task, the sum of the fractions (i.e. effective worker–capacity) must cover the work.
     for m in range(n_seq):
-        required = (100 * seq_times_frac[m].numerator * T_frac.denominator // (T_frac.numerator * x[m] * seq_times_frac[m].denominator)) + 1
-        print(f"Task {m}: required = {required}")
+        efficiency_multiplier_m = efficiency_multiplier[:, m].T
+        num = 10000 * seq_times_frac[m].numerator * T_frac.denominator
+        den = T_frac.numerator * seq_times_frac[m].denominator * cp.Element(efficiency_multiplier_m, x[m]-1)
+        required = (num + den - 1) // den
         # We allow a penalty if the capacity is a bit short; the objective will try to drive these penalties to zero.
-        model += cp.sum(occupation[i, m] for i in range(num_workers)) + penalty[m] >= required
+        model += cp.sum(occupation[i, m] for i in range(num_workers)) + penalty[m] == required
 
     # Constraint 11: Each worker’s total manual time cannot exceed 100% of his occupation.
     for i in range(num_workers):
-        model += cp.sum(occupation[i, m] for m in range(n_seq)) <= 100
+        model += cp.sum(occupation[i, m] for m in range(total_tasks)) <= 100
     
     # Constraint 12: For splittable tasks, each pair (a, b) in task_pairs and each worker, the sum of the fractions
     # that worker devotes to tasks a and b cannot exceed 1.
@@ -240,8 +254,17 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # Constraint 13: A worker can only split his occupation between multiple splittable tasks if he doesn't exceed the occupation treshold in both tasks. 
     # (e.g. It is trivial for a worker to devote 99% of his occupation to one task and 1% to another task)
     for i in range(num_workers):
-        model += (cp.sum(assign[i, :]) >= 1).implies(cp.all([assign[i, t]*occupation[i, t] <= occupation_treshold for t in range(n_seq)]))
-
+        model += (cp.sum(assign[i, :]) > 1).implies(cp.all([assign[i, t]*occupation[i, t] <= occupation_treshold for t in range(n_seq)]))
+    
+    # Constraint 14: If a worker is assigned to a task, his occupation for that task must be greater then 0.
+    for i in range(num_workers):
+        for j in range(n_seq):
+            model += (assign[i,j]).implies(occupation[i, j] != 0)
+            model += (assign[i,stringing_index]).implies(occupation[i, stringing_index] == 100)
+            model += (assign[i,operate_laminator_index]).implies(occupation[i, operate_laminator_index] == 100)
+    
+    model += [occupation[i, operate_bussing_index] == 0 for i in range(num_workers)]
+    model += [occupation[i, operate_layup_index] == 0 for i in range(num_workers)]
 
     # --- Introduce worker "used" variables for preference tracking ---
     used = cp.boolvar(shape=num_workers)
@@ -252,8 +275,10 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # (secondarily) avoid using non-preferred workers, and (tertiary) minimize any penalties.
     p = [1 if preferred_list[i] else 0 for i in range(num_workers)]
     obj = (LARGE_WEIGHT  * cp.sum(used[i] for i in range(num_workers)) +
-           MEDIUM_WEIGHT * cp.sum(penalty[m] for m in range(n_seq)) -
+           MEDIUM_WEIGHT * cp.sum(penalty[m] for m in range(n_seq)) + 
+           MEDIUM_WEIGHT * cp.sum(occupation_nonzero[i, m] for i in range(num_workers) for m in range(n_seq)) -
            SMALL_WEIGHT  * cp.sum(p[i] * used[i] for i in range(num_workers)))
+
     
     model.minimize(obj)
         
@@ -262,9 +287,11 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
             "x": x.value(),
             "assignment": assign.value(),
             "used": used.value(),
+            "occupation": occupation.value(),
             "total_workers": sum(used.value()),
             "T": T_frac
         }
+        print(penalty.value())
         print(obj.value())
         print(occupation.value())
         return sol
@@ -277,6 +304,10 @@ class ProductionLineUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Production Line Worker Allocation")
+
+        # Set the dark theme
+        style = ttk.Style(self)
+        style.theme_use("clam")
 
         # Create a canvas and a scrollbar
         self.canvas = tk.Canvas(self)
@@ -351,6 +382,20 @@ class ProductionLineUI(tk.Tk):
             min_workers_entry.insert(0, str(default_min_workers[i]))
             self.seq_entries.append(min_workers_entry)
 
+            # Maximum number of necessary workers
+            ttk.Label(seq_frame, text="Max Workers").grid(row=i, column=5, sticky="w", padx=5)
+            max_workers_entry = ttk.Entry(seq_frame, width=8)
+            max_workers_entry.grid(row=i, column=6, padx=5, pady=2)
+            max_workers_entry.insert(0, str(default_max_workers[i]))
+            self.seq_entries.append(max_workers_entry)
+
+            ttk.Label(seq_frame, text="Efficiency**").grid(row=i, column=7, sticky="w", padx=5)
+            efficiency_entry = ttk.Entry(seq_frame, width=8)
+            efficiency_entry.grid(row=i, column=8, padx=5, pady=2)
+            efficiency_entry.insert(0, str(100))
+            self.seq_entries.append(efficiency_entry)
+            ttk.Label(seq_frame, text="%").grid(row=i, column=9, sticky="w", padx=5)
+
         # --- Worker Skill Matrix ---
         skill_frame = ttk.LabelFrame(self.left_frame, text="Worker Skill Matrix (All Tasks)")
         skill_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
@@ -398,6 +443,10 @@ class ProductionLineUI(tk.Tk):
         self.result_text.insert(tk.END, "    the cycle time of one laminator by the number of laminators.\n")
         self.result_text.insert(tk.END, "    The number of laminators variable is used to allocate one worker per laminator,\n")
         self.result_text.insert(tk.END, "    defining the number of laminator operators.\n")
+        self.result_text.insert(tk.END, " **  Efficiency is a measure of how effectively workers perform their tasks.\n")
+        self.result_text.insert(tk.END, "     If the efficiency is 90, it means that when there are 2 workers assigned to a task,\n")
+        self.result_text.insert(tk.END, "     their individual efficiency will be 90%. When there are 3 workers assigned to a task,\n")
+        self.result_text.insert(tk.END, "     their individual efficiency will be 100 * 0.9 * 0.9%.\n")
 
     def _on_mouse_wheel(self, event):
         self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
@@ -433,6 +482,19 @@ class ProductionLineUI(tk.Tk):
         except ValueError:
             messagebox.showerror("Input error", "Enter valid numbers for the minimum number of workers.")
             return
+
+        # Read the maximum number of workers for each sequential task
+        try:
+            max_workers = [int(e.get()) for e in self.seq_entries if e.grid_info()['column'] == 6]
+        except ValueError:
+            messagebox.showerror("Input error", "Enter valid numbers for the maximum number of workers.")
+            return
+        
+        try:
+            efficiency = [int(e.get()) for e in self.seq_entries if e.grid_info()['column'] == 8]
+        except ValueError:
+            messagebox.showerror("Input error", "Enter valid numbers for the efficiency.")
+            return
             
         # Read the worker skill matrix.
         skill_matrix = []
@@ -446,7 +508,7 @@ class ProductionLineUI(tk.Tk):
         pref_list = [bool(self.pref_vars[i].get()) for i in range(default_num_workers)]
         
         # Solve the model.
-        sol = solve_model(seq_times, auto_times, skill_matrix, pref_list, num_laminators, min_workers, 50)
+        sol = solve_model(seq_times, auto_times, skill_matrix, pref_list, num_laminators, min_workers, max_workers, 50, efficiency)
         self.result_text.delete("1.0", tk.END)
         if sol is None:
             self.result_text.insert(tk.END, "No feasible solution found.\n")
@@ -463,9 +525,12 @@ class ProductionLineUI(tk.Tk):
                 assigned_workers = []
                 for i in range(default_num_workers):
                     if sol["assignment"][i, m] == 1:
-                        assigned_workers.append(worker_names[i])
+                        if sol["occupation"][i][m] > 0:
+                            assigned_workers.append(f'{worker_names[i]} ({sol["occupation"][i][m]}%)')
+                        else:
+                            assigned_workers.append(worker_names[i])
                 if m < n_seq:
-                    # For sequential tasks, display effective time.
+                    # For sequential tasks, display effective time and occupation.
                     eff_time = seq_times[m] / sol["x"][m]
                     self.result_text.insert(tk.END,
                         f"Task: {task}\n"
@@ -485,7 +550,11 @@ class ProductionLineUI(tk.Tk):
             for i in range(default_num_workers):
                 used_str = "USED" if sol["used"][i] == 1 else "not used"
                 pref_str = " (preferred)" if self.pref_vars[i].get() == 1 else ""
-                self.result_text.insert(tk.END, f"  {worker_names[i]}: {used_str}{pref_str}\n")
+                total_occupation = sum(sol["occupation"][i])
+                if total_occupation != 0:
+                    self.result_text.insert(tk.END, f"  {worker_names[i]}: {used_str}{pref_str}, Total Occupation: {total_occupation}%\n")
+                else:
+                    self.result_text.insert(tk.END, f"  {worker_names[i]}: {used_str}{pref_str}\n")
                 
 
 if __name__ == "__main__":
