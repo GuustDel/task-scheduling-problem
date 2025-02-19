@@ -20,6 +20,8 @@ from tkinter import ttk, messagebox
 import cpmpy as cp
 import numpy as np
 from fractions import Fraction
+import os
+import sys
 
 # === Data definitions ===
 
@@ -77,25 +79,25 @@ skill_matrix = [
     [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0], # Fazli
     [1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1], # Mohammedsalih
     [0, 1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 1], # Singh
-    [1, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0], # Chance
+    [1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0], # Chance
     [0, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0], # Tashrif
     [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0], # Shahidullah
     [1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Himmat
     [1, 1, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0], # Benda
-    [1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Shams
-    [0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0], # Beata
+    [1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0], # Shams
+    [0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0], # Beata
     [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1], # Roger
-    [0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0], # Serhii
-    [1, 1, 1, 1, 0, 1, 1, 0, 0, 1, 0, 0], # Sabba
+    [0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 0, 0], # Serhii
+    [1, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0], # Sabba
     [1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Fahim
-    [0, 1, 1, 0, 0, 1, 1, 0, 0, 0, 0, 0], # Mahmoud
+    [0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0], # Mahmoud
     [0, 1, 1, 0, 0, 1, 1, 1, 0, 0, 0, 1], # Fanuel
-    [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1], # Tedros
-    [0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 0], # Latifi
-    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0], # Oksana
-    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0], # Romy
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0], # Tedros
+    [0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0], # Latifi
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], # Oksana
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], # Romy
     [1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0], # Zakhel
-    [0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], # Abdul
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0], # Abdul
 ]
 
 # A large constant for lexicographic weighting.
@@ -160,10 +162,11 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # Constraint 1: For each task, the number of assigned workers equals x[m].
     for m in range(total_tasks):
         model += cp.sum([assign[i, m] for i in range(num_workers)]) == x[m]
-    
+
     # Constraint 2: For each sequential task, at least the minimum required workers are assigned.
     for m in range(n_seq):
         model += x[m] >= min_workers[m]
+        model += x[m] % min_workers[m] == 0
         model += x[m] <= max_workers[m]
 
     # Constraint 3: A worker may only be assigned to a task if they are skilled.
@@ -171,7 +174,7 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
         for m in range(total_tasks):
             if not skill_matrix[i][m]:
                 model += assign[i, m] == 0
-    
+
     # Constraint 4: Ensure that each laminator has exactly one worker assigned.
     model += x[operate_laminator_index] == num_laminators
     model += x[stringing_index] == 1
@@ -203,9 +206,6 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # Introduce integer decision variables for the fraction of time each worker spends on each sequential task.
     occupation = cp.intvar(0, 100, shape=(num_workers, total_tasks))
 
-    # Introduce binary variables to indicate if a worker is assigned to a task
-    occupation_nonzero = cp.boolvar(shape=(num_workers, n_seq))
-
     efficiency_multiplier = np.zeros((num_workers, n_seq), dtype=int)
     for i in range(num_workers):
         for j in range(n_seq):
@@ -229,7 +229,6 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     for i in range(num_workers):
         for m in range(n_seq):
             model += occupation[i, m] <= 100 * assign[i, m]
-            model += occupation_nonzero[i, m] == (occupation[i, m] > 0)
 
     # Constraint 10: For each sequential task, the sum of the fractions (i.e. effective worker–capacity) must cover the work.
     for m in range(n_seq):
@@ -243,7 +242,7 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # Constraint 11: Each worker’s total manual time cannot exceed 100% of his occupation.
     for i in range(num_workers):
         model += cp.sum(occupation[i, m] for m in range(total_tasks)) <= 100
-    
+
     # Constraint 12: For splittable tasks, each pair (a, b) in task_pairs and each worker, the sum of the fractions
     # that worker devotes to tasks a and b cannot exceed 1.
     for (a, b) in task_pairs:
@@ -255,16 +254,26 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     # (e.g. It is trivial for a worker to devote 99% of his occupation to one task and 1% to another task)
     for i in range(num_workers):
         model += (cp.sum(assign[i, :]) > 1).implies(cp.all([assign[i, t]*occupation[i, t] <= occupation_treshold for t in range(n_seq)]))
-    
+
     # Constraint 14: If a worker is assigned to a task, his occupation for that task must be greater then 0.
     for i in range(num_workers):
         for j in range(n_seq):
             model += (assign[i,j]).implies(occupation[i, j] != 0)
             model += (assign[i,stringing_index]).implies(occupation[i, stringing_index] == 100)
             model += (assign[i,operate_laminator_index]).implies(occupation[i, operate_laminator_index] == 100)
-    
+
     model += [occupation[i, operate_bussing_index] == 0 for i in range(num_workers)]
     model += [occupation[i, operate_layup_index] == 0 for i in range(num_workers)]
+
+    # Create reference occupation variables for each task
+    reference_occupation = cp.intvar(0, 100, shape=n_seq)
+
+    # Constraint: If the minimum number of workers for a task is greater than 1, then the workers assigned should do the same amount of work
+    for m in range(n_seq):
+        min_workers_greater_than_one = cp.boolvar()
+        model += (min_workers_greater_than_one == (min_workers[m] > 1))
+        for i in range(num_workers):
+            model += (min_workers_greater_than_one & assign[i, m]).implies(occupation[i, m] == reference_occupation[m])
 
     # --- Introduce worker "used" variables for preference tracking ---
     used = cp.boolvar(shape=num_workers)
@@ -276,12 +285,11 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
     p = [1 if preferred_list[i] else 0 for i in range(num_workers)]
     obj = (LARGE_WEIGHT  * cp.sum(used[i] for i in range(num_workers)) +
            MEDIUM_WEIGHT * cp.sum(penalty[m] for m in range(n_seq)) + 
-           MEDIUM_WEIGHT * cp.sum(occupation_nonzero[i, m] for i in range(num_workers) for m in range(n_seq)) -
            SMALL_WEIGHT  * cp.sum(p[i] * used[i] for i in range(num_workers)))
 
-    
+
     model.minimize(obj)
-        
+
     if model.solve():        
         sol = {
             "x": x.value(),
@@ -291,9 +299,6 @@ def solve_model(seq_times, auto_times, skill_matrix, preferred_list, num_laminat
             "total_workers": sum(used.value()),
             "T": T_frac
         }
-        print(penalty.value())
-        print(obj.value())
-        print(occupation.value())
         return sol
     else:
         return None
@@ -305,9 +310,22 @@ class ProductionLineUI(tk.Tk):
         super().__init__()
         self.title("Production Line Worker Allocation")
 
+        def resource_path(relative_path):
+            """ Get absolute path to resource, works for dev and for PyInstaller. """
+            try:
+                # PyInstaller creates a temporary folder and stores path in _MEIPASS.
+                base_path = sys._MEIPASS
+            except Exception:
+                base_path = os.path.abspath(".")
+            return os.path.join(base_path, relative_path)
+        
+        self.iconbitmap(resource_path("favicon.ico"))
+
+        self.state("zoomed")
+
         # Set the dark theme
         style = ttk.Style(self)
-        style.theme_use("clam")
+        style.theme_use("classic")
 
         # Create a canvas and a scrollbar
         self.canvas = tk.Canvas(self)
